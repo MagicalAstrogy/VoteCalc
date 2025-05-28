@@ -36,6 +36,7 @@ jobs:
         port: ${{ secrets.VPS_PORT }}
         source: "./publish/*"
         target: "${{ secrets.DEPLOY_PATH }}"
+        overwrite: true
         strip_components: 1
         
     - name: Restart application
