@@ -29,7 +29,11 @@ namespace MyDiscordApp
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
             
             var configuration = builder.Build();
-            var json = File.ReadAllText(Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json"));
+            var json = Environment.GetEnvironmentVariable("VOTE_CONFIG");
+            if (string.IsNullOrEmpty(json))
+            {
+                json = File.ReadAllText(Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json"));
+            }
             _config = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
             
             if (string.IsNullOrWhiteSpace(_config.Discord.Token))
