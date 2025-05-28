@@ -1,0 +1,23 @@
+﻿
+● GitHub Actions 配置完成
+
+  已创建构建和部署工作流。需要在 GitHub 仓库配置以下 Secrets：
+
+  必需的 Secrets：
+  - VPS_HOST: VPS 服务器 IP 或域名
+  - VPS_USERNAME: SSH 用户名
+  - VPS_SSH_KEY: SSH 私钥（完整内容）
+  - VPS_PORT: SSH 端口（默认22）
+  - DEPLOY_PATH: 部署路径（如 /opt/votecalc）
+
+  配置步骤：
+  1. 在 GitHub 仓库页面点击 Settings → Secrets and variables → Actions
+  2. 点击 "New repository secret" 添加上述每个 Secret
+
+  目标服务器准备：
+  1. 创建用户和目录：sudo useradd -m votecalc && sudo mkdir -p /opt/votecalc
+  2. 设置权限：sudo chown votecalc:votecalc /opt/votecalc
+  3. 安装 systemd 服务：sudo cp votecalc.service /etc/systemd/system/
+  4. 启用服务：sudo systemctl enable votecalc.service
+
+  工作流会在推送到 main 分支时自动构建和部署。
