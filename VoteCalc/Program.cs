@@ -1,12 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
+﻿using System.Diagnostics;
 using System.Net;
 using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
 using DSharpPlus;
 using DSharpPlus.Entities;
 using DSharpPlus.SlashCommands;
@@ -14,7 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MyDiscordApp.Configuration;
 
-namespace MyDiscordApp
+namespace VoteCalc
 {
     class Program
     {
@@ -367,19 +361,19 @@ namespace MyDiscordApp
             // 构建输出文本
             foreach (var item in sortedItems)
             {
-                sb.AppendLine($"• 帖子 '{item.Name}'");
-                sb.AppendLine(
+                sb.AppendLineCrlf($"• 帖子 '{item.Name}'");
+                sb.AppendLineCrlf(
                     $"最高表情 {item.Emoji} × {item.TotalReactions}，有效评价 {item.EffectiveCount} 人 , 比例 [{item.Percentage}%]");
             }
             
             // 如果需要输出有效用户列表
             if (outputUsers)
             {
-                sb.AppendLine("======");
-                sb.AppendLine("有效用户");
+                sb.AppendLineCrlf("======");
+                sb.AppendLineCrlf("有效用户");
                 foreach (var discordUser in validUsers)
                 {
-                    sb.AppendLine($"• '{discordUser.Username}', {discordUser.Presence}");
+                    sb.AppendLineCrlf($"• '{discordUser.Username}', {discordUser.Presence}");
                 }
             }
             
