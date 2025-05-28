@@ -78,91 +78,117 @@ namespace MyDiscordApp
     public class AnalyzeModule : ApplicationCommandModule
     {
         private readonly Stopwatch _watch = new Stopwatch();
-        [SlashCommand("analyze", "统计论坛频道或指定主题帖的最高反应与有效用户数量（带调试日志）")]
-        public async Task AnalyzeAsync(
-            InteractionContext ctx,
-            [Option("urls", "逗号分隔的频道或主题链接，如 https://discord.com/channels/服务器ID/频道ID)")] string urls,
-            [Option("min_votes", "有效投票所需的最少投票作品数。")] long minVotes = 3,
-            [Option("output_users", "是否输出所有有效投票用户,默认否")] bool outputUsers = false)
+        
+        private struct ReactionSummary
         {
-            _watch.Restart();
-            var whiteList = Program.Config.Discord.WhitelistUserIds;
-            var allowedRoles = Program.Config.Discord.AllowedRoles;
-            Console.WriteLine($"[DEBUG] /analyze invoked by {ctx.User.Username}, urls: {urls}");
-            if (!whiteList.Contains(ctx.User.Id) && 
-                !(ctx.Member?.Roles?.Any(r => allowedRoles.Contains(r.Name)) ?? false))
+            public string Name { get; set; }
+            public DiscordEmoji Emoji { get; set; }
+            public int TotalReactions { get; set; }
+            public int EffectiveCount { get; set; }
+            public int Percentage { get; set; }
+        }
+        
+        /// <summary>
+        /// 解析URL字符串，提取Discord频道信息
+        /// 支持逗号和冒号分隔符，冒号分隔的项目会被视为同一作品
+        /// </summary>
+        /// <param name="urls">包含Discord链接的字符串，支持逗号和冒号分隔</param>
+        /// <param name="client">Discord客户端</param>
+        /// <returns>返回频道映射、分组信息和主频道名称</returns>
+        private async Task<(Dictionary<ulong, DiscordThreadChannel> channelMsgs, 
+                          Dictionary<ulong, List<ulong>> channelGroups, 
+                          Dictionary<ulong, string> primaryChannelNames)> 
+            ParseUrlsAsync(string urls, DiscordClient client)
+        {
+            var channelMsgs = new Dictionary<ulong, DiscordThreadChannel>();
+            var channelGroups = new Dictionary<ulong, List<ulong>>(); 
+            var primaryChannelNames = new Dictionary<ulong, string>();
+            
+            // 首先按逗号分割获取独立项或冒号分组
+            var items = urls.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()).ToList();
+            
+            foreach (var item in items)
             {
-                Console.WriteLine("[DEBUG] Not In WhiteList or proper role, skip");
-                await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent("⚠️ 不在白名单内，无法使用。"));
-                return; 
-            }
-            // 延迟 ACK
-            await ctx.CreateResponseAsync(InteractionResponseType.DeferredChannelMessageWithSource,
-                new DiscordInteractionResponseBuilder()
-                    .WithContent("⏳ 正在统计，请稍后…")
-                    .AsEphemeral(true));
-
-            // 解析 URL 列表
-            var channelMsgs = new Dictionary<ulong /*id*/, DiscordThreadChannel>();
-            foreach (var raw in urls.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()))
-            {
-                if (!Uri.IsWellFormedUriString(raw, UriKind.Absolute))
+                // 检查是否包含冒号分隔的URL
+                var colonParts = item.Split('~', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()).ToList();
+                var parsedChannels = new List<(ulong channelId, DiscordThreadChannel channel)>();
+                
+                // 解析当前项中的所有URL（无论是单个还是冒号分隔的多个）
+                foreach (var raw in colonParts)
                 {
-                    Console.WriteLine($"[DEBUG] Skipping invalid URL: {raw}");
-                    continue;
-                }
-                try
-                {
-                    var uri = new Uri(raw);
-                    var segs = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                    // 主题链接：/channels/{guildId}/{channelId}/{messageId}
-                    // 频道链接：/channels/{guildId}/{channelId}
-                    if (segs.Length >= 3 && segs[0] == "channels")
+                    if (!Uri.IsWellFormedUriString(raw, UriKind.Absolute))
                     {
-                        var channelId = ulong.Parse(segs[2]);
-                        Console.WriteLine($"[DEBUG] Parsed forum channel link: channelId={channelId}, fetching recent topics...");
-                        var forumChannel = await ctx.Client.GetChannelAsync(channelId);
-                        Console.WriteLine($"[DEBUG] Fetched Channel {forumChannel.IsThread}");
-                        if (!forumChannel.IsThread)
+                        Console.WriteLine($"[DEBUG] Skipping invalid URL: {raw}");
+                        continue;
+                    }
+                    
+                    try
+                    {
+                        var uri = new Uri(raw);
+                        var segs = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                        
+                        // Discord链接格式：/channels/{guildId}/{channelId}
+                        if (segs.Length >= 3 && segs[0] == "channels")
                         {
-                            Console.WriteLine("Not thread, continue.");
-                            continue;
+                            var channelId = ulong.Parse(segs[2]);
+                            Console.WriteLine($"[DEBUG] Parsed forum channel link: channelId={channelId}");
+                            
+                            var forumChannel = await client.GetChannelAsync(channelId);
+                            Console.WriteLine($"[DEBUG] Fetched Channel {forumChannel.IsThread}");
+                            
+                            if (!forumChannel.IsThread)
+                            {
+                                Console.WriteLine("Not thread, continue.");
+                                continue;
+                            }
+
+                            var threadChannel = forumChannel as DiscordThreadChannel ?? throw new InvalidOperationException();
+                            channelMsgs.TryAdd(forumChannel.Id, threadChannel);
+                            parsedChannels.Add((forumChannel.Id, threadChannel));
                         }
-
-                        channelMsgs.TryAdd(forumChannel.Id,
-                            forumChannel as DiscordThreadChannel ?? throw new InvalidOperationException());
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Console.WriteLine($"[DEBUG] URL path not recognized: {uri.AbsolutePath}");
+                        Console.WriteLine($"[ERROR] Parsing URL failed: {raw}, error: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
+                
+                // 处理冒号分隔的分组逻辑
+                if (colonParts.Count > 1 && parsedChannels.Count > 0)
                 {
-                    Console.WriteLine($"[ERROR] Parsing URL failed: {raw}, error: {ex.Message}");
+                    // 使用第一个解析的频道作为主频道
+                    var primaryId = parsedChannels[0].channelId;
+                    var primaryName = parsedChannels[0].channel.Name;
+                    
+                    // 创建包含所有已解析频道的分组
+                    var groupIds = parsedChannels.Select(pc => pc.channelId).ToList();
+                    channelGroups[primaryId] = groupIds;
+                    primaryChannelNames[primaryId] = primaryName;
+                    
+                    Console.WriteLine($"[DEBUG] Created group: primary={primaryId} ({primaryName}), members={string.Join(",", groupIds)}");
                 }
             }
-
-            if (!channelMsgs.Any())
-            {
-                Console.WriteLine("[DEBUG] No valid channels or topics found. Exiting.");
-                await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent("⚠️ 未解析到有效的频道或主题链接。"));
-                return;
-            }
-
-            // 执行统计
-            var analyzer = new ReactionAnalyzer(ctx.Client);
+            
+            return (channelMsgs, channelGroups, primaryChannelNames);
+        }
+        
+        /// <summary>
+        /// 收集所有频道的反应数据
+        /// </summary>
+        private async Task<Dictionary<ulong, (DiscordEmoji TopEmoji, int Count, List<DiscordUser> Users)>> 
+            GatherReactionsAsync(Dictionary<ulong, DiscordThreadChannel> channelMsgs, ReactionAnalyzer analyzer)
+        {
             var combinedTop = new Dictionary<ulong, (DiscordEmoji TopEmoji, int Count, List<DiscordUser> Users)>();
-
+            
             Console.WriteLine("[DEBUG] Starting reaction gathering...");
             foreach (var info in channelMsgs)
             {
                 var channel = info.Value;
                 try
                 {
-                    var ch = channel;
-                    Console.WriteLine($"[DEBUG] Gathering for channel {ch.Name}");
-                    var tops = await analyzer.PurrGatherTopReactionsAsync(ch, new []{ch.Id});
+                    Console.WriteLine($"[DEBUG] Gathering for channel {channel.Name}");
+                    var tops = await analyzer.PurrGatherTopReactionsAsync(channel, new[] { channel.Id });
+                    
                     foreach (var item in tops)
                     {
                         combinedTop[item.Key] = item.Value;
@@ -174,26 +200,175 @@ namespace MyDiscordApp
                     Console.WriteLine($"[ERROR] Error fetching reactions for channel {channel.Name}: {ex.Message}");
                 }
             }
-
-            Console.WriteLine("[DEBUG] Filtering valid users...");
-            var validUsers = analyzer.MeowFilterValidUsers(combinedTop, minMessagesReacted: (int)minVotes);
-            Console.WriteLine($"[DEBUG] Valid users count: {validUsers.Count}");
-            var userIds = validUsers.Select(u => u.Id).ToHashSet();
-
-            Console.WriteLine("[DEBUG] Counting effective reactions...");
-            var effectiveCounts = analyzer.NapCountEffectiveReactions(combinedTop, userIds);
-
-            // 构造输出
-            var sb = new StringBuilder();
+            
+            return combinedTop;
+        }
+        
+        /// <summary>
+        /// 处理分组频道的投票合并逻辑
+        /// 将同一分组内的多个频道视为一个作品进行投票计数
+        /// </summary>
+        private Dictionary<ulong, (DiscordEmoji TopEmoji, int Count, List<DiscordUser> Users)> 
+            MergeGroupedChannelsForVoting(
+                Dictionary<ulong, (DiscordEmoji TopEmoji, int Count, List<DiscordUser> Users)> combinedTop,
+                Dictionary<ulong, List<ulong>> channelGroups)
+        {
+            var mergedTopForVoting = new Dictionary<ulong, (DiscordEmoji TopEmoji, int Count, List<DiscordUser> Users)>();
+            var processedForVoting = new HashSet<ulong>();
+            
             foreach (var kv in combinedTop)
             {
-                var id    = kv.Key;
-                var channel = channelMsgs[id];
-                var (e, tot, us) = kv.Value;
-                var eff   = effectiveCounts[id];
-                sb.AppendLine($"• 帖子 '{channel.Name}'：最高表情 {e} × {tot}，有效评价 {eff} 人 , 比例 [{(int)(eff * 100 / tot )}%]");
+                var channelId = kv.Key;
+                if (processedForVoting.Contains(channelId))
+                    continue;
+                
+                // 检查该频道是否属于某个分组
+                var groupPrimary = channelGroups.FirstOrDefault(g => g.Value.Contains(channelId)).Key;
+                if (groupPrimary != 0)
+                {
+                    // 该频道属于一个分组，合并组内所有频道的用户
+                    var groupChannels = channelGroups[groupPrimary];
+                    var mergedUsers = new HashSet<DiscordUser>();
+                    DiscordEmoji topEmoji = null;
+                    int totalCount = 0;
+                    
+                    foreach (var groupChannelId in groupChannels)
+                    {
+                        if (combinedTop.TryGetValue(groupChannelId, out var channelData))
+                        {
+                            if (topEmoji == null) topEmoji = channelData.TopEmoji;
+                            totalCount += channelData.Count;
+                            // 使用HashSet确保用户唯一性
+                            foreach (var user in channelData.Users)
+                            {
+                                mergedUsers.Add(user);
+                            }
+                        }
+                        processedForVoting.Add(groupChannelId);
+                    }
+                    
+                    // 使用主频道ID添加合并后的条目
+                    mergedTopForVoting[groupPrimary] = (topEmoji, totalCount, mergedUsers.ToList());
+                    Console.WriteLine($"[DEBUG] Merged group {groupPrimary}: {mergedUsers.Count} unique users across {groupChannels.Count} channels");
+                }
+                else
+                {
+                    // 单个频道，不属于任何分组
+                    mergedTopForVoting[channelId] = kv.Value;
+                    processedForVoting.Add(channelId);
+                }
             }
-
+            
+            return mergedTopForVoting;
+        }
+        
+        /// <summary>
+        /// 构建输出文本，处理分组频道的聚合显示
+        /// </summary>
+        private string BuildOutputText(
+            Dictionary<ulong, (DiscordEmoji TopEmoji, int Count, List<DiscordUser> Users)> combinedTop,
+            Dictionary<ulong, DiscordThreadChannel> channelMsgs,
+            Dictionary<ulong, List<ulong>> channelGroups,
+            Dictionary<ulong, string> primaryChannelNames,
+            Dictionary<ulong, int> effectiveCounts,
+            HashSet<ulong> userIds,
+            HashSet<DiscordUser> validUsers,
+            bool outputUsers)
+        {
+            var sb = new StringBuilder();
+            var processedChannels = new HashSet<ulong>();
+            
+            // 收集所有需要显示的项目及其有效评价数量
+            var itemsToDisplay = new List<ReactionSummary>();
+            
+            foreach (var kv in combinedTop)
+            {
+                var id = kv.Key;
+                
+                // 跳过已作为分组一部分处理过的频道
+                if (processedChannels.Contains(id))
+                    continue;
+                
+                // 检查该频道是否是某个分组的主频道
+                var groupPrimary = channelGroups.FirstOrDefault(g => g.Value.Contains(id)).Key;
+                if (groupPrimary != 0)
+                {
+                    // 处理分组项目 - 聚合所有成员的结果
+                    var groupIds = channelGroups[groupPrimary];
+                    var primaryName = primaryChannelNames[groupPrimary];
+                    
+                    // 收集分组内所有频道的反应数据
+                    var totalReactions = 0;
+                    DiscordEmoji topEmoji = null;
+                    
+                    // 统计分组内的唯一有效用户
+                    var uniqueEffectiveUsers = new HashSet<ulong>();
+                    var uniqueUsers = new HashSet<ulong>();
+                    foreach (var groupId in groupIds)
+                    {
+                        if (combinedTop.TryGetValue(groupId, out var groupData))
+                        {
+                            var (emoji, count, users) = groupData;
+                            if (topEmoji == null) topEmoji = emoji;
+                            
+                            // 统计有效用户
+                            foreach (var user in users)
+                            {
+                                if (userIds.Contains(user.Id))
+                                {
+                                    uniqueEffectiveUsers.Add(user.Id);
+                                }
+                                uniqueUsers.Add(user.Id);
+                            }
+                        }
+                        processedChannels.Add(groupId);
+                    }
+                    totalReactions = uniqueUsers.Count;
+                    
+                    var uniqueEffectiveCount = uniqueEffectiveUsers.Count;
+                    var percentage = totalReactions > 0 ? (int)(uniqueEffectiveCount * 100 / totalReactions) : 0;
+                    
+                    itemsToDisplay.Add(new ReactionSummary
+                    {
+                        Name = primaryName,
+                        Emoji = topEmoji,
+                        TotalReactions = totalReactions,
+                        EffectiveCount = uniqueEffectiveCount,
+                        Percentage = percentage
+                    });
+                }
+                else
+                {
+                    // 处理单个频道
+                    var channel = channelMsgs[id];
+                    var (e, tot, us) = kv.Value;
+                    var eff = effectiveCounts[id];
+                    var percentage = tot > 0 ? (int)(eff * 100 / tot) : 0;
+                    
+                    itemsToDisplay.Add(new ReactionSummary
+                    {
+                        Name = channel.Name,
+                        Emoji = e,
+                        TotalReactions = tot,
+                        EffectiveCount = eff,
+                        Percentage = percentage
+                    });
+                    processedChannels.Add(id);
+                }
+            }
+            
+            // 按有效评价数量从多到少排序
+            var sortedItems = itemsToDisplay.OrderByDescending(item => item.EffectiveCount);
+            
+            // 构建输出文本
+            foreach (var item in sortedItems)
+            {
+                sb.AppendLine($"• 帖子 '{item.Name}'");
+                sb.AppendLine(
+                    $"最高表情 {item.Emoji} × {item.TotalReactions}，有效评价 {item.EffectiveCount} 人 , 比例 [{item.Percentage}%]");
+            }
+            
+            // 如果需要输出有效用户列表
             if (outputUsers)
             {
                 sb.AppendLine("======");
@@ -203,11 +378,90 @@ namespace MyDiscordApp
                     sb.AppendLine($"• '{discordUser.Username}', {discordUser.Presence}");
                 }
             }
-
-            _watch.Stop();
-            sb.AppendLine($"> 总计算时间：{_watch.Elapsed.TotalSeconds}");
             
-            var resultText = sb.Length > 0 ? sb.ToString() : "⚠️ 无统计结果。";
+            return sb.ToString();
+        }
+        
+        [SlashCommand("analyze", "统计论坛频道或指定主题帖的最高反应与有效用户数量（带调试日志）")]
+        public async Task AnalyzeAsync(
+            InteractionContext ctx,
+            [Option("urls", "逗号分隔的频道或主题链接，如 https://discord.com/channels/服务器ID/频道ID)")] string urls,
+            [Option("min_votes", "有效投票所需的最少投票作品数。")] long minVotes = 3,
+            [Option("output_users", "是否输出所有有效投票用户,默认否")] bool outputUsers = false)
+        {
+            _watch.Restart();
+                      
+            // 发送处理中的响应
+            await ctx.CreateResponseAsync(InteractionResponseType.DeferredChannelMessageWithSource,
+                new DiscordInteractionResponseBuilder()
+                    .WithContent("⏳ 正在统计，请稍后…")
+                    .AsEphemeral(true));
+            
+            // 权限检查
+            var whiteList = Program.Config.Discord.WhitelistUserIds;
+            var allowedRoles = Program.Config.Discord.AllowedRoles;
+            Console.WriteLine($"[DEBUG] /analyze invoked by {ctx.User.Username}, urls: {urls}");
+            
+            if (!whiteList.Contains(ctx.User.Id) && 
+                !(ctx.Member?.Roles?.Any(r => allowedRoles.Contains(r.Name)) ?? false))
+            {
+                Console.WriteLine("[DEBUG] Not In WhiteList or proper role, skip");
+                await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent("⚠️ 不在白名单内，无法使用。"));
+                return; 
+            }
+  
+            
+            await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent($"⏳ 评价收集中..."));
+
+
+            // 步骤1：解析URL并获取频道信息
+            var (channelMsgs, channelGroups, primaryChannelNames) = await ParseUrlsAsync(urls, ctx.Client);
+
+            if (!channelMsgs.Any())
+            {
+                Console.WriteLine("[DEBUG] No valid channels or topics found. Exiting.");
+                await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent("⚠️ 未解析到有效的频道或主题链接。"));
+                return;
+            }
+            await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent($"⏳ 已获取 {channelMsgs.Count} 个参赛作品..."));
+
+            // 步骤2：收集所有频道的反应数据
+            var analyzer = new ReactionAnalyzer(ctx.Client);
+            var combinedTop = await GatherReactionsAsync(channelMsgs, analyzer);
+            await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent($"⏳ 评价收集完成..."));
+
+            // 步骤3：处理分组频道的投票合并
+            // 同一分组内的多个频道会被视为一个作品，用户对组内多个频道的投票只计为一次
+            Console.WriteLine("[DEBUG] Filtering valid users...");
+            var mergedTopForVoting = MergeGroupedChannelsForVoting(combinedTop, channelGroups);
+            
+            // 步骤4：筛选有效用户（根据最少投票数要求）
+            var validUsers = analyzer.MeowFilterValidUsers(mergedTopForVoting, minMessagesReacted: (int)minVotes);
+            Console.WriteLine($"[DEBUG] Valid users count: {validUsers.Count}");
+            var userIds = validUsers.Select(u => u.Id).ToHashSet();
+
+            // 步骤5：统计每个频道的有效反应数
+            Console.WriteLine("[DEBUG] Counting effective reactions...");
+            var effectiveCounts = analyzer.NapCountEffectiveReactions(combinedTop, userIds);
+
+            // 步骤6：构建输出文本
+            var resultText = BuildOutputText(
+                combinedTop, 
+                channelMsgs, 
+                channelGroups, 
+                primaryChannelNames, 
+                effectiveCounts, 
+                userIds, 
+                validUsers, 
+                outputUsers);
+            
+            _watch.Stop();
+            resultText += $"\n> 总计算时间：{_watch.Elapsed.TotalSeconds}";
+            
+            if (string.IsNullOrWhiteSpace(resultText))
+            {
+                resultText = "⚠️ 无统计结果。";
+            }
 
             Console.WriteLine("[DEBUG] Analysis complete, sending result...");
             // 分段发送（基于换行）
