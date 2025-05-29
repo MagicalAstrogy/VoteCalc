@@ -42,6 +42,7 @@
 **参数说明**：
 - `urls`：逗号分隔的 Discord 帖子链接
   - 支持单个链接：`https://discord.com/channels/服务器ID/频道ID`
+  - 支持汇总帖子：`https://discord.com/channels/服务器ID/频道ID/帖子ID`
   - 支持多个链接：用逗号 `,` 分隔
   - 支持分组作品：用波浪号 `~` 连接同一作品的多个链接
 - `min_votes`：有效投票所需的最少投票作品数（默认为3）
@@ -66,13 +67,6 @@
 - **Slash Commands**：现代化的 Discord 命令交互方式
 
 ## 部署说明 🚀
-
-### Docker 部署（推荐）
-
-项目包含了完整的 CI/CD 配置：
-
-1. GitHub Actions 会自动构建 Docker 镜像
-2. 使用提供的 `votecalc.service` 可以作为系统服务运行
 
 ### 手动部署
 

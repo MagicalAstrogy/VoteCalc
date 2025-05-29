@@ -88,6 +88,109 @@ namespace VoteCalc
         }
         
         /// <summary>
+        /// 预扫描items列表，提取消息中的Discord频道链接
+        /// </summary>
+        /// <param name="items">原始URL列表（将被原地修改）</param>
+        /// <param name="client">Discord客户端</param>
+        /// <returns>返回消息链接集合</returns>
+        private async Task<HashSet<string>> 
+            PreScanForMessageLinksAsync(List<string> items, DiscordClient client)
+        {
+            var extractedUrls = new List<string>();
+            var messageItems = new HashSet<string>(); // 记录已处理的消息链接
+            
+            foreach (var item in items)
+            {
+                // 检查是否包含冒号分隔的URL
+                var colonParts = item.Split('~', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()).ToList();
+                
+                foreach (var raw in colonParts)
+                {
+                    if (!Uri.IsWellFormedUriString(raw, UriKind.Absolute))
+                        continue;
+                        
+                    try
+                    {
+                        var uri = new Uri(raw);
+                        var segs = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                        
+                        // 检查是否是消息链接格式：/channels/{guildId}/{channelId}/{messageId}
+                        if (segs.Length == 4 && segs[0] == "channels")
+                        {
+                            messageItems.Add(item); // 记录这是一个消息链接项
+                            
+                            var guildId = ulong.Parse(segs[1]);
+                            var channelId = ulong.Parse(segs[2]);
+                            var messageId = ulong.Parse(segs[3]);
+                            
+                            Console.WriteLine($"[DEBUG] Found message link: guild={guildId}, channel={channelId}, message={messageId}");
+                            
+                            // 获取消息内容
+                            try
+                            {
+                                var channel = await client.GetChannelAsync(channelId);
+                                var message = await channel.GetMessageAsync(messageId, true);
+                                
+                                if (message != null)
+                                {
+                                    // 先检查消息内容中是否包含~连接的链接
+                                    // 按行分割消息内容，每行可能包含一个或多个用~连接的链接
+                                    var lines = message.Content.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                                    
+                                    foreach (var line in lines)
+                                    {
+                                        // 检查这一行是否包含Discord频道链接
+                                        var pattern = @"https://discord\.com/channels/(\d+)/(\d+)";
+                                        var matches = System.Text.RegularExpressions.Regex.Matches(line, pattern);
+                                        
+                                        if (matches.Count > 0)
+                                        {
+                                            // 检查这一行是否包含~分隔符
+                                            if (line.Contains("~"))
+                                            {
+                                                // 提取所有URL并用~连接
+                                                var urlsInLine = new List<string>();
+                                                foreach (System.Text.RegularExpressions.Match match in matches)
+                                                {
+                                                    urlsInLine.Add(match.Value);
+                                                }
+                                                var joinedUrls = string.Join("~", urlsInLine);
+                                                extractedUrls.Add(joinedUrls);
+                                                Console.WriteLine($"[DEBUG] Extracted grouped URLs from message: {joinedUrls}");
+                                            }
+                                            else
+                                            {
+                                                // 没有~分隔符，单独添加每个URL
+                                                foreach (System.Text.RegularExpressions.Match match in matches)
+                                                {
+                                                    extractedUrls.Add(match.Value);
+                                                    Console.WriteLine($"[DEBUG] Extracted single URL from message: {match.Value}");
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[ERROR] Failed to fetch message content: {ex.Message}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERROR] Failed to parse URL in pre-scan: {raw}, error: {ex.Message}");
+                    }
+                }
+            }
+            
+            // 原地修改items列表，添加提取的URL
+            items.AddRange(extractedUrls);
+            
+            return messageItems;
+        }
+        
+        /// <summary>
         /// 解析URL字符串，提取Discord频道信息
         /// 支持逗号和冒号分隔符，冒号分隔的项目会被视为同一作品
         /// </summary>
@@ -106,8 +209,17 @@ namespace VoteCalc
             // 首先按逗号分割获取独立项或冒号分组
             var items = urls.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()).ToList();
             
+            // 预扫描阶段：提取消息中的频道链接
+            var messageItems = await PreScanForMessageLinksAsync(items, client);
+            
             foreach (var item in items)
             {
+                // 跳过已经在预扫描中处理过的消息链接
+                if (messageItems.Contains(item))
+                {
+                    Console.WriteLine($"[DEBUG] Skipping message item: {item}");
+                    continue;
+                }
                 // 检查是否包含冒号分隔的URL
                 var colonParts = item.Split('~', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()).ToList();
                 var parsedChannels = new List<(ulong channelId, DiscordThreadChannel channel)>();
@@ -384,7 +496,7 @@ namespace VoteCalc
         [SlashCommand("analyze", "统计论坛频道或指定主题帖的最高反应与有效用户数量（带调试日志）")]
         public async Task AnalyzeAsync(
             InteractionContext ctx,
-            [Option("urls", "逗号分隔的频道或主题链接，如 https://discord.com/channels/服务器ID/频道ID)")] string urls,
+            [Option("urls", "逗号分隔的频道链接，如 https://discord.com/channels/服务器ID/频道ID；或是汇总的帖子链接)")] string urls,
             [Option("min_votes", "有效投票所需的最少投票作品数。")] long minVotes = 3,
             [Option("output_users", "是否输出所有有效投票用户,默认否")] bool outputUsers = false)
         {
