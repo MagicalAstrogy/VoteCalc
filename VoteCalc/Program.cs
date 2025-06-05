@@ -498,7 +498,8 @@ namespace VoteCalc
             InteractionContext ctx,
             [Option("urls", "逗号分隔的频道链接，如 https://discord.com/channels/服务器ID/频道ID；或是汇总的帖子链接)")] string urls,
             [Option("min_votes", "有效投票所需的最少投票作品数。")] long minVotes = 3,
-            [Option("output_users", "是否输出所有有效投票用户,默认否")] bool outputUsers = false)
+            [Option("output_users", "是否输出所有有效投票用户,默认否")] bool outputUsers = false,
+            [Option("global_visible", "是否可以被自己以外的用户看到")] bool globalVisible = false)
         {
             _watch.Restart();
                       
@@ -506,7 +507,7 @@ namespace VoteCalc
             await ctx.CreateResponseAsync(InteractionResponseType.DeferredChannelMessageWithSource,
                 new DiscordInteractionResponseBuilder()
                     .WithContent("⏳ 正在统计，请稍后…")
-                    .AsEphemeral(true));
+                    .AsEphemeral(!globalVisible));
             
             // 权限检查
             var whiteList = Program.Config.Discord.WhitelistUserIds;
@@ -587,7 +588,7 @@ namespace VoteCalc
                     Console.WriteLine($"[DEBUG] Sending follow-up chunk {idx + 1}/{paragraphs.Count}");
                     await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder()
                         .WithContent(paragraphs[idx])
-                        .AsEphemeral(true)); 
+                        .AsEphemeral(!globalVisible)); 
                 }
             }
             catch (Exception ex)
