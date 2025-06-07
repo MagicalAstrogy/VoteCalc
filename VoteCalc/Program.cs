@@ -153,9 +153,19 @@ namespace VoteCalc
                                 
                                 if (message != null)
                                 {
+                                    var content = message.Content;
+                                    if (message.Embeds.Count > 0)
+                                    {
+                                        foreach (var embed in message.Embeds)
+                                        {
+                                            content += '\n';
+                                            content += embed.Description;
+                                            Console.WriteLine($"[DEBUG] Embed msg, get description.");
+                                        }
+                                    }
                                     // 先检查消息内容中是否包含~连接的链接
                                     // 按行分割消息内容，每行可能包含一个或多个用~连接的链接
-                                    var lines = message.Content.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                                    var lines = content.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
                                     
                                     foreach (var line in lines)
                                     {
