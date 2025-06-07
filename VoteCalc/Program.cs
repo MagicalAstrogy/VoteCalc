@@ -599,7 +599,7 @@ namespace VoteCalc
                                         maxWeightRole = role.Name;
                                     }
                                     var user = validUsers.FirstOrDefault(u => u.Id == userId);
-                                    Console.WriteLine($"[DEBUG] User {user?.Username ?? userId.ToString()} has role {role.Name} with weight {weight} in guild {guild.Name}");
+                                    //Console.WriteLine($"[DEBUG] User {user?.Username ?? userId.ToString()} has role {role.Name} with weight {weight} in guild {guild.Name}");
                                 }
                             }
                             
