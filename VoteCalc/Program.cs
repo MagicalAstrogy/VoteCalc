@@ -63,10 +63,11 @@ namespace VoteCalc
             });
 
             // 3. 将命令模块注册到指定的 Guild（开发阶段）或全局
+            /*
             foreach (var guildId in _config.Discord.TestGuildIds)
             {
                 slash.RegisterCommands<AnalyzeModule>(guildId);
-            }
+            }*/
             //不再直接注册所有 Guild， 只受理部分 Guild 的请求。
             slash.RegisterCommands<AnalyzeModule>();
             // 正式环境可注册全局命令： slash.RegisterCommands<AnalyzeModule>();
