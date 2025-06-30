@@ -857,6 +857,8 @@ namespace VoteCalc
                 new DiscordInteractionResponseBuilder()
                     .WithContent("⏳ 正在统计，请稍后…")
                     .AsEphemeral(!globalVisible));
+            // 似乎不发这个消息，dc会认为没有进行应答，很怪。
+            await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent($"⏳ 评价收集中..."));
             
             
             // 权限检查
@@ -903,7 +905,7 @@ namespace VoteCalc
                 }
             }
             
-            await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent($"⏳ 评价收集中..."));
+            
 
             // 初始化错误信息列表
             var errorInfo = new List<string>();
