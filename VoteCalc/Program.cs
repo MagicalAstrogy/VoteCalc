@@ -654,7 +654,7 @@ namespace VoteCalc
         /// <summary>
         /// 构建输出文本，处理分组频道的聚合显示
         /// </summary>
-        private string BuildOutputText(AnalyzeContext context)
+        private async Task<string> BuildOutputText(DiscordClient client, AnalyzeContext context)
         {
             var sb = new StringBuilder();
             var processedChannels = new HashSet<ulong>();
@@ -809,11 +809,27 @@ namespace VoteCalc
             // 如果需要输出有效用户列表
             if (context.OutputUsers)
             {
+                var guilds = new List<DiscordGuild>();
+                var guildIds = Program.Config.Discord.TestGuildIds;
+                foreach (var guildId in guildIds)
+                {
+                    var guild = await client.GetGuildAsync(guildId);
+                    if (guild != null)
+                        guilds.Add(guild);
+                }
                 sb.AppendLineCrlf("======");
                 sb.AppendLineCrlf("有效用户");
                 foreach (var discordUser in context.ValidUsers)
                 {
-                    sb.AppendLineCrlf($"• '{discordUser.Username}', {discordUser.Presence}");
+                    var validMemberInfos = guilds.Select(current => current.Members.GetValueOrDefault(discordUser.Id))
+                        .Where(member => member != null);
+                    var usernames = validMemberInfos.Select(member => $"`{member.DisplayName}`");
+                    var groups = validMemberInfos
+                        .Select(member => string.Join('&',
+                            member.Roles
+                                .Select(r => $"`{r.Name}`")));
+                    
+                    sb.AppendLineCrlf($"• `{discordUser.Username}`, {string.Join(" 或 ", usernames)}, {string.Join('&', groups)}");
                 }
             }
             
@@ -973,7 +989,7 @@ namespace VoteCalc
                 RoleDistribution = roleDistribution,
                 ErrorInfo = errorInfo
             };
-            var resultText = BuildOutputText(analyzeContext);
+            var resultText = await BuildOutputText(ctx.Client, analyzeContext);
             
             _watch.Stop();
             resultText += $"\n> 总计算时间：{_watch.Elapsed.TotalSeconds}";
