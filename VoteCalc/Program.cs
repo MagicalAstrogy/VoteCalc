@@ -171,7 +171,7 @@ namespace VoteCalc
                                     foreach (var line in lines)
                                     {
                                         // 检查这一行是否包含Discord频道链接
-                                        var pattern = @"https://discord\.com/channels/(\d+)/(\d+)";
+                                        var pattern = @"https://discord[a-z]*\.com/channels/(\d+)/(\d+)";
                                         var matches = System.Text.RegularExpressions.Regex.Matches(line, pattern);
                                         
                                         if (matches.Count > 0)
