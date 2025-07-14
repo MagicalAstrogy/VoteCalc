@@ -70,6 +70,7 @@ namespace VoteCalc
             }*/
             //不再直接注册所有 Guild， 只受理部分 Guild 的请求。
             slash.RegisterCommands<AnalyzeModule>();
+            slash.RegisterCommands<SystemStatus>();
             // 正式环境可注册全局命令： slash.RegisterCommands<AnalyzeModule>();
 
             // 4. 连接并运行
