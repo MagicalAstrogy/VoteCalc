@@ -73,7 +73,13 @@ namespace VoteCalc
             slash.RegisterCommands<SystemStatus>();
             // 正式环境可注册全局命令： slash.RegisterCommands<AnalyzeModule>();
 
-            // 4. 连接并运行
+            // 4. 注册按钮交互事件处理器
+            discord.ComponentInteractionCreated += async (sender, e) =>
+            {
+                await VoteCalc.CopyContentHandler.HandleCopyContentButton(sender, e);
+            };
+
+            // 5. 连接并运行
             await discord.ConnectAsync();
             await Task.Delay(-1);
         }
@@ -89,8 +95,10 @@ namespace VoteCalc
             public DiscordEmoji Emoji { get; set; }
             public int TotalReactions { get; set; }
             public int EffectiveCount { get; set; }
+            public double CategoryMultiplier { get; set; }
             public double WeightedCount { get; set; }
             public int Percentage { get; set; }
+            public string Link { get; set; }
         }
         
         private class AnalyzeContext
@@ -105,6 +113,7 @@ namespace VoteCalc
             public bool OutputUsers { get; set; }
             public Dictionary<ulong, double> UserWeights { get; set; }
             public Dictionary<string, int> RoleDistribution { get; set; }
+            public Dictionary<string, double> ForumWeights { get; set; }
             public List<string> ErrorInfo { get; set; }
         }
         
@@ -234,7 +243,7 @@ namespace VoteCalc
         /// <returns>返回频道映射、分组信息和主频道名称</returns>
         private async Task<(Dictionary<ulong, DiscordThreadChannel> channelMsgs, 
                           Dictionary<ulong, List<ulong>> channelGroups, 
-                          Dictionary<ulong, string> primaryChannelNames)> 
+                          Dictionary<ulong, string> primaryChannelNames)>
             ParseUrlsAsync(string urls, DiscordClient client, List<string>? errorInfo)
         {
             var channelMsgs = new Dictionary<ulong, DiscordThreadChannel>();
@@ -660,6 +669,10 @@ namespace VoteCalc
             var sb = new StringBuilder();
             var processedChannels = new HashSet<ulong>();
             
+            // 判断是否使用了加权（角色权重或分区权重）
+            bool hasWeighting = (context.UserWeights != null && context.UserWeights.Any()) || 
+                               (context.ForumWeights != null && context.ForumWeights.Any());
+            
             // 收集所有需要显示的项目及其有效评价数量
             var itemsToDisplay = new List<ReactionSummary>();
             
@@ -688,6 +701,30 @@ namespace VoteCalc
                     var uniqueUsers = new HashSet<ulong>();
                     double groupWeightedScore = 0.0; // 分组的加权总分
                     
+                    var linkStr = new List<string>();
+                    
+                    // 获取分组内所有频道的最高forum权重
+                    double maxForumWeight = 1.0;
+                    if (context.ForumWeights != null && context.ForumWeights.Any())
+                    {
+                        foreach (var groupId in groupIds)
+                        {
+                            if (context.ChannelMsgs.TryGetValue(groupId, out var channel) && channel.Parent != null)
+                            {
+                                var forumName = channel.Parent.Name;
+                                linkStr.Add($"[链接]({channel.GetThreadUrl()})");
+                                foreach (var fw in context.ForumWeights)
+                                {
+                                    if (forumName.Contains(fw.Key))
+                                    {
+                                        maxForumWeight = Math.Max(maxForumWeight, fw.Value);
+                                        Console.WriteLine($"[DEBUG] Group channel {groupId} in forum '{forumName}' matched '{fw.Key}' with weight {fw.Value}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     foreach (var groupId in groupIds)
                     {
                         if (context.CombinedTop.TryGetValue(groupId, out var groupData))
@@ -728,14 +765,19 @@ namespace VoteCalc
                         groupWeightedScore = uniqueEffectiveCount;
                     }
                     
+                    // 应用forum权重
+                    groupWeightedScore *= maxForumWeight;
+                    
                     itemsToDisplay.Add(new ReactionSummary
                     {
                         Name = primaryName,
                         Emoji = topEmoji,
                         TotalReactions = totalReactions,
+                        CategoryMultiplier = maxForumWeight,
                         EffectiveCount = uniqueEffectiveCount,
                         WeightedCount = groupWeightedScore,
-                        Percentage = percentage
+                        Percentage = percentage,
+                        Link = string.Join(',', linkStr)
                     });
                 }
                 else
@@ -761,33 +803,51 @@ namespace VoteCalc
                         }
                     }
                     
+                    // 应用forum权重
+                    double forumWeight = 1.0;
+                    if (context.ForumWeights != null && context.ForumWeights.Any() && channel.Parent != null)
+                    {
+                        var forumName = channel.Parent.Name;
+                        foreach (var fw in context.ForumWeights)
+                        {
+                            if (forumName.Contains(fw.Key))
+                            {
+                                forumWeight = Math.Max(forumWeight, fw.Value);
+                                Console.WriteLine($"[DEBUG] Channel {id} in forum '{forumName}' matched '{fw.Key}' with weight {fw.Value}");
+                            }
+                        }
+                    }
+                    channelWeightedScore *= forumWeight;
+                    
                     itemsToDisplay.Add(new ReactionSummary
                     {
                         Name = channel.Name,
                         Emoji = e,
                         TotalReactions = tot,
                         EffectiveCount = eff,
+                        CategoryMultiplier = forumWeight,
                         WeightedCount = channelWeightedScore,
-                        Percentage = percentage
+                        Percentage = percentage,
+                        Link = $"[链接]({channel.GetThreadUrl()})"
                     });
                     processedChannels.Add(id);
                 }
             }
             
             // 按有效评价数量从多到少排序（如果有权重则按权重排序）
-            var sortedItems = context.UserWeights != null 
+            var sortedItems = hasWeighting
                 ? itemsToDisplay.OrderByDescending(item => item.WeightedCount)
                 : itemsToDisplay.OrderByDescending(item => item.EffectiveCount);
             
             // 构建输出文本
             foreach (var item in sortedItems)
             {
-                sb.AppendLineCrlf($"• 帖子 '{item.Name}'");
+                sb.AppendLineCrlf($"• 帖子 '{item.Name}' {item.Link}");
                 // 如果有权重且权重不等于人数，显示加权分数
-                if (context.UserWeights != null && Math.Abs(item.WeightedCount - item.EffectiveCount) > 0.01)
+                if (hasWeighting && Math.Abs(item.WeightedCount - item.EffectiveCount) > 0.01)
                 {
                     sb.AppendLineCrlf(
-                        $"最高表情 {item.Emoji} × {item.TotalReactions}，有效评价 {item.EffectiveCount} 人，加权后 {item.WeightedCount:F2} 分，比例 [{item.Percentage}%]");
+                        $"最高表情 {item.Emoji} × {item.TotalReactions}，有效评价 {item.EffectiveCount} 人，分区系数 {item.CategoryMultiplier}，加权后 {item.WeightedCount:F2} 分，比例 [{item.Percentage}%]");
                 }
                 else
                 {
@@ -856,7 +916,8 @@ namespace VoteCalc
             [Option("output_users", "是否输出所有有效投票用户,默认否")] bool outputUsers = false,
             [Option("global_visible", "是否可以被自己以外的用户看到")] bool globalVisible = false,
             [Option("valid_reactions", "逗号分隔的有效反应列表，如 :thumbsup:,:heart:,:star:")] string validReactions = "",
-            [Option("role_weight", "角色权重JSON，如 {\"创作者\": 1.25, \"尖耳朵\": 2, \"已验证\": 1}")] string roleWeight = "")
+            [Option("role_weight", "角色权重JSON，如 {\"创作者\": 1.25, \"尖耳朵\": 2, \"已验证\": 1}")] string roleWeight = "",
+            [Option("forum_weight", "分区权重JSON，如 {\"纯净区\": 8.0, \"男性向\": 1.0, \"小众区\": 5.0}")] string forumWeight = "")
             // roleWeight参数说明:
             // - 允许为不同角色设置投票权重，用于加权计算投票结果
             // - 格式为JSON对象，键为角色名称，值为权重数值
@@ -866,6 +927,15 @@ namespace VoteCalc
             //   - 已验证角色的票数保持原值（乘以1）
             // - 如果用户拥有多个角色，将使用最高权重
             // - 未指定的角色默认权重为1.0
+            // forumWeight参数说明:
+            // - 允许为不同分区设置权重，用于加权计算投票结果
+            // - 格式为JSON对象，键为分区名称关键字，值为权重数值
+            // - 示例: {"纯净区": 8.0, "男性向": 1.0, "小众区": 5.0}
+            //   - 如果频道所在的forum名称包含"纯净区"，反应数会乘以8.0
+            //   - 如果频道所在的forum名称包含"男性向"，反应数会乘以1.0
+            //   - 如果频道所在的forum名称包含"小众区"，反应数会乘以5.0
+            // - 对于分组频道，使用组内最高权重
+            // - 未匹配的分区默认权重为1.0
         {
             _watch.Restart();
                       
@@ -922,6 +992,35 @@ namespace VoteCalc
                 }
             }
             
+            // 步骤0.5：解析和验证分区权重JSON（如果提供）
+            Dictionary<string, double> forumWeights = null;
+            if (!string.IsNullOrWhiteSpace(forumWeight))
+            {
+                try
+                {
+                    // 解析JSON格式的分区权重配置
+                    forumWeights = JsonSerializer.Deserialize<Dictionary<string, double>>(forumWeight);
+                    if (forumWeights != null && forumWeights.Any())
+                    {
+                        Console.WriteLine($"[DEBUG] Parsed forum weights: {string.Join(", ", forumWeights.Select(kv => $"{kv.Key}={kv.Value}"))}");
+                        
+                        // 验证权重值的合理性（应该大于0）
+                        var invalidWeights = forumWeights.Where(kv => kv.Value <= 0).ToList();
+                        if (invalidWeights.Any())
+                        {
+                            var errorMsg = $"⚠️ 分区权重值必须大于0，错误的权重：{string.Join(", ", invalidWeights.Select(kv => $"{kv.Key}={kv.Value}"))}";
+                            await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(errorMsg));
+                            return;
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    Console.WriteLine($"[ERROR] Failed to parse forum weights JSON: {ex.Message}");
+                    await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent($"⚠️ 分区权重JSON格式错误：{ex.Message}"));
+                    return;
+                }
+            }
             
 
             // 初始化错误信息列表
@@ -988,6 +1087,7 @@ namespace VoteCalc
                 OutputUsers = outputUsers,
                 UserWeights = userWeights,
                 RoleDistribution = roleDistribution,
+                ForumWeights = forumWeights,
                 ErrorInfo = errorInfo
             };
             var resultText = await BuildOutputText(ctx.Client, analyzeContext);
@@ -1001,18 +1101,38 @@ namespace VoteCalc
             }
 
             Console.WriteLine("[DEBUG] Analysis complete, sending result...");
-            // 分段发送（基于换行）
-            var paragraphs = SplitIntoChunksByLines(resultText, maxChunkSize: 1800);
+            // 分段发送（基于换行），使用更大的块大小因为Embed有更高的字符限制
+            var paragraphs = SplitIntoChunksByLines(resultText, maxChunkSize: 3900);
             try
             {
-                // 第一段：EditResponse
-                await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(paragraphs[0]));
-                // 后续段落：FollowUp
+                // 第一段：EditResponse with Embed
+                var firstEmbed = new DiscordEmbedBuilder()
+                    .WithTitle("投票统计结果")
+                    .WithDescription(paragraphs[0])
+                    .WithColor(DiscordColor.Cyan)
+                    .WithTimestamp(DateTime.UtcNow);
+                
+                // 添加复制按钮
+                var copyButton = VoteCalc.CopyContentHandler.CreateCopyButton($"analyze_{ctx.Interaction.Id}");
+                await ctx.EditResponseAsync(new DiscordWebhookBuilder()
+                    .AddEmbed(firstEmbed)
+                    .AddComponents(copyButton));
+                
+                // 后续段落：FollowUp with Embed
                 for (int idx = 1; idx < paragraphs.Count; idx++)
                 {
                     Console.WriteLine($"[DEBUG] Sending follow-up chunk {idx + 1}/{paragraphs.Count}");
+                    var followUpEmbed = new DiscordEmbedBuilder()
+                        .WithTitle($"投票统计结果 (续 {idx + 1})")
+                        .WithDescription(paragraphs[idx])
+                        .WithColor(DiscordColor.Cyan)
+                        .WithTimestamp(DateTime.UtcNow);
+                    
+                    // 为每个后续消息添加复制按钮
+                    var followUpCopyButton = VoteCalc.CopyContentHandler.CreateCopyButton($"analyze_{ctx.Interaction.Id}_{idx}");
                     await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder()
-                        .WithContent(paragraphs[idx])
+                        .AddEmbed(followUpEmbed)
+                        .AddComponents(followUpCopyButton)
                         .AsEphemeral(!globalVisible)); 
                 }
             }

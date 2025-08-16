@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using DSharpPlus.Entities;
 
 namespace VoteCalc;
 
@@ -13,5 +14,10 @@ public static class StringBuilderExtensions
     {
         if (value != null) sb.Append(value);
         return sb.Append(CRLF);
+    }
+    
+    public static string GetThreadUrl(this DiscordThreadChannel thread)
+    {
+        return $"https://discord.com/channels/{thread.GuildId}/{thread.Id}/{thread.Id}";
     }
 }
