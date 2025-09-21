@@ -62,7 +62,7 @@ public class ReactionAnalyzer
                 }
                 
                 Console.WriteLine($"[DEBUG] Top reaction for {msgId}: {topReaction.Emoji} x {topReaction.Count}");
-                var users = (await message.GetReactionsAsync(topReaction.Emoji, 1440)).ToList();
+                var users = (await message.GetReactionsAsync(topReaction.Emoji, 4096)).ToList();
                 Console.WriteLine($"[DEBUG] Users retrieved for reaction: {users.Count}");
                 result[msgId] = (topReaction.Emoji, topReaction.Count, users);
             }
