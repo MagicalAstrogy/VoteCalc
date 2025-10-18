@@ -965,6 +965,8 @@ namespace VoteCalc
                 {
                     Console.WriteLine($"Roles {string.Join(',', ctx.Member?.Roles?.Select(r => r.Name))}");
                     Console.WriteLine($"RoleIds {string.Join(',', ctx.Member?.Roles?.Select(r => r.Id))}");
+                    Console.WriteLine($"AllowRoles {string.Join(',', allowedRoles)}");
+                    Console.WriteLine($"AllowRoleIds {string.Join(',', allowedRoleIds.Select(r=>r.ToString()))}");
                 }
                 catch (Exception)
                 {
