@@ -951,10 +951,14 @@ namespace VoteCalc
             // 权限检查
             var whiteList = Program.Config.Discord.WhitelistUserIds;
             var allowedRoles = Program.Config.Discord.AllowedRoles;
+            var allowedRoleIds = Program.Config.Discord.AllowedRoleIds;
             Console.WriteLine($"[DEBUG] /analyze invoked by {ctx.User.Username}, urls: {urls}");
+
+            var nameMatch = ctx.Member?.Roles?.Any(r => allowedRoles.Contains(r.Name)) ?? false;
+            var idMatch = ctx.Member?.Roles?.Any(r => allowedRoleIds.Contains(r.Id)) ?? false;
             
             if (!whiteList.Contains(ctx.User.Id) && 
-                !(ctx.Member?.Roles?.Any(r => allowedRoles.Contains(r.Name)) ?? false))
+                !(nameMatch || idMatch))
             {
                 Console.WriteLine("[DEBUG] Not In WhiteList or proper role, skip");
                 await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent("⚠️ 不在白名单内，无法使用。"));

@@ -7,6 +7,7 @@ namespace MyDiscordApp.Configuration
         public ulong[] TestGuildIds { get; set; } = Array.Empty<ulong>();
         public ulong[] WhitelistUserIds { get; set; } = Array.Empty<ulong>();
         public string[] AllowedRoles { get; set; } = Array.Empty<string>();
+        public ulong[] AllowedRoleIds { get; set; } = Array.Empty<ulong>();
     }
 
     public class AppConfig
