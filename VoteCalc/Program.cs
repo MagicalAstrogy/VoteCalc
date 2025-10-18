@@ -961,6 +961,16 @@ namespace VoteCalc
                 !(nameMatch || idMatch))
             {
                 Console.WriteLine("[DEBUG] Not In WhiteList or proper role, skip");
+                try
+                {
+                    Console.WriteLine($"Roles {string.Join(',', ctx.Member?.Roles?.Select(r => r.Name))}");
+                    Console.WriteLine($"RoleIds {string.Join(',', ctx.Member?.Roles?.Select(r => r.Id))}");
+                }
+                catch (Exception)
+                {
+                    
+                }
+                
                 await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent("⚠️ 不在白名单内，无法使用。"));
                 return; 
             }
