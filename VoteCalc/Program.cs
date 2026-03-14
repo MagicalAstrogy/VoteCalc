@@ -808,6 +808,8 @@ namespace VoteCalc
                     if (context.ForumWeights != null && context.ForumWeights.Any() && channel.Parent != null)
                     {
                         var forumName = channel.Parent.Name;
+                        //整个频道分类
+                        forumName += channel.Parent?.Parent?.Name??"";
                         foreach (var fw in context.ForumWeights)
                         {
                             if (forumName.Contains(fw.Key))
